@@ -12,6 +12,8 @@ build
 
 __pycache__
 
+AGENTS.local.md
 CLAUDE.local.md
+opencode.json
 .claude
 uv.toml

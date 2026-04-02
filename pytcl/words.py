@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import string
-from collections.abc import Iterator
 from dataclasses import dataclass, field
 from itertools import chain
-from typing import Any, ClassVar, Literal, Self, TextIO, TypeVar, dataclass_transform, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, TextIO, TypeVar, dataclass_transform, overload
 
 from pytcl.errors import TCLSubstituteError
 from pytcl.iterators import CharsIterator, read_text_io_by_characters
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 class TCLWordBase:

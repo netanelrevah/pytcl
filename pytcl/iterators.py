@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Self, TextIO
+from typing import TYPE_CHECKING, Self, TextIO
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 @dataclass

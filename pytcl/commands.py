@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import functools
 import operator
-from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from functools import reduce
 from itertools import chain
-from typing import Any, ClassVar, Literal, Self, TypeVar, dataclass_transform
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, TypeVar, dataclass_transform
 
 from pytcl.errors import TCLInterpretationError
 from pytcl.iterators import CharsIterator
@@ -19,6 +18,9 @@ from pytcl.words import (
     TCLVariableSubstitutionWord,
     TCLWord,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator, Sequence
 
 
 class TCLCommandBase:
@@ -54,10 +56,7 @@ class TCLCommandForEach(TCLCommandBase):
             if isinstance(argument, TCLWord):
                 names_list = (argument.substitute(namespace),)
             elif isinstance(argument, TCLBracesWord):
-                names_list_words = []
-                for word in TCLList.interpertize(argument, namespace).words:
-                    names_list_words.append(word)
-                names_list = tuple(names_list_words)
+                names_list = tuple(TCLList.interpertize(argument, namespace).words)
             else:
                 raise ValueError()
 
@@ -339,7 +338,7 @@ class ExpressionOperator:
             except ValueError:
                 return operand
 
-    def apply(self, *operands: str, namespace: dict[str, Any]) -> str:
+    def apply(self, *operands: TCLMathOperandType, namespace: dict[str, Any]) -> str:
         result = reduce(self.operator_func, map(lambda x: self._parse_operand(x, namespace), operands))
         if isinstance(result, bool):
             return "1" if result else "0"
@@ -488,15 +487,16 @@ class TCLExpression(TCLCommandBase):
             token = postfix.pop(0)
 
             if isinstance(token, str) and (expression_operator := EXPRESSION_OPERATOR.get(token, None)) is not None:
-                operands = []
-                for _ in range(expression_operator.number_of_operands if expression_operator.number_of_operands else 2):
-                    operands.append(commands_stack.pop())
-                commands_stack.append(expression_operator.from_args(*reversed(operands)))
+                operands = [commands_stack.pop() for _ in range(expression_operator.number_of_operands or 2)]
+                commands_stack.append(expression_operator.apply(*reversed(operands), namespace=namespace))
                 continue
 
             commands_stack.append(token)
 
-        if len(commands_stack) != 1 or not isinstance(commands_stack[0], TCLMathOperator):
+        if len(commands_stack) != 1:
             raise TCLInterpretationError()
 
-        return commands_stack[0]
+        result = commands_stack[0]
+        if isinstance(result, str):
+            return result
+        return result.substitute(namespace)

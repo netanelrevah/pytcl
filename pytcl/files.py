@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pytcl.words import TCLScript
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def read_tcl_file(source_file_path: Path) -> TCLScript:

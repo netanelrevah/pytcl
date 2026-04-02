@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import dataclass
 from itertools import chain
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Self
 
 from pytcl.words import TCLBracesWord, TCLBracketWord, TCLDoubleQuotedWord, TCLVariableSubstitutionWord, TCLWord
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 @dataclass
