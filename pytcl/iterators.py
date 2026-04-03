@@ -18,7 +18,7 @@ class CharsIterator:
         self._accumulator_stack.append([])
 
     def pop(self) -> str:
-        return "".join(self._accumulator_stack[-1])
+        return "".join(self._accumulator_stack.pop())
 
     def __next__(self) -> str:
         if self._leftovers:
@@ -32,6 +32,9 @@ class CharsIterator:
 
     def push_back(self) -> None:
         self._leftovers.append(self._accumulator_stack[-1][-1])
+
+    def unget(self, char: str) -> None:
+        self._leftovers.insert(0, char)
 
     def drop_last(self) -> None:
         self._accumulator_stack[-1].pop(-1)

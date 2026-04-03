@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import string
 from dataclasses import dataclass, field
-from itertools import chain
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, TextIO, TypeVar, dataclass_transform, overload
 
 from pytcl.errors import TCLSubstituteError
@@ -103,7 +102,7 @@ class TCLWord(TCLWordBase):
         name = ""
         while char := next(chars, None):
             match char:
-                case " " | "\t" | "\n":
+                case " " | "\t" | "\n" | ";":
                     chars.push_back()
                     chars.drop_last()
                     break
@@ -284,9 +283,11 @@ class TCLCommandWord(TCLWordBase):
     args: list[TCLCommandArguments]
 
     def substitute_iterator(self, namespace: dict[str, Any]) -> Iterator[str]:
-        if self.name not in namespace:
+        cmd = namespace.get(self.name)
+        if cmd is None:
             raise TCLSubstituteError(f'invalid command name "{self.name}"')
-        yield from namespace[self.name].substitute_iterator(namespace)
+        substituted = [arg.substitute(namespace) for arg in self.args]
+        yield from cmd(substituted, namespace)
 
     @classmethod
     def read_name(cls, chars: Iterator[str]) -> str:
@@ -321,10 +322,13 @@ class TCLCommandWord(TCLWordBase):
                     arguments.append(TCLBracketWord.read(chars))
                 case "}" | "]":
                     raise ValueError()
+                case "$":
+                    arguments.append(TCLVariableSubstitutionWord.read(chars))
                 case " " | "\t":
                     continue
                 case _:
-                    arguments.append(TCLWord.read(chain(char, chars)))
+                    chars.push_back()
+                    arguments.append(TCLWord.read(chars))
         return cls(name, arguments)
 
 
@@ -336,9 +340,11 @@ class TCLScript(TCLWordBase):
     commands: list[TCLCommandWord]
 
     def substitute_iterator(self, namespace: dict[str, Any]) -> Iterator[str]:
+        result = ""
         for command in self.commands:
-            command.substitute_iterator(namespace)
-        yield ""
+            if command.name:
+                result = command.substitute(namespace)
+        yield from result
 
     @classmethod
     def handle_comment(cls, chars: Iterator[str]) -> None:
@@ -356,7 +362,8 @@ class TCLScript(TCLWordBase):
                 case "#":
                     cls.handle_comment(chars)
                 case _:
-                    commands.append(TCLCommandWord.read(chain([char], chars)))
+                    chars.push_back()
+                    commands.append(TCLCommandWord.read(chars))
 
         return cls(commands)
 

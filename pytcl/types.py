@@ -39,7 +39,7 @@ class TCLList:
                     yield TCLWord.read(chain([char], chars)).substitute(namespace)
 
     @classmethod
-    def interpertize(
+    def build(
         cls,
         list_word: TCLWord | TCLDoubleQuotedWord | TCLBracesWord | TCLBracketWord | TCLVariableSubstitutionWord,
         namespace: dict[str, Any],

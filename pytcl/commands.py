@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-import functools
 import operator
 from dataclasses import dataclass
 from functools import reduce
 from itertools import chain
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, TypeVar, dataclass_transform
+from typing import TYPE_CHECKING, Any, Literal, Self
 
-from pytcl.errors import TCLInterpretationError
+from pytcl.errors import TCLBreakSignal, TCLContinueSignal, TCLInterpretationError
 from pytcl.iterators import CharsIterator
 from pytcl.types import TCLList
 from pytcl.words import (
     TCLBracesWord,
+    TCLBracketWord,
     TCLCommandArguments,
     TCLDoubleQuotedWord,
     TCLScript,
@@ -23,22 +23,35 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence
 
 
-class TCLCommandBase:
-    def execute(self, namespace: dict[str, Any]) -> str:
-        raise NotImplementedError()
-
-    @classmethod
-    def interpertize(cls, arguments: list[TCLCommandArguments], namespace: dict[str, Any]) -> Self:
-        raise NotImplementedError()
-
-
 @dataclass
-class TCLCommandForEach(TCLCommandBase):
+class TCLCommandForEach:
     variables_names_and_values_lists: list[tuple[tuple[str, ...], TCLList]]
     body: TCLScript
 
+    def substitute(self, namespace: dict[str, Any]) -> str:
+        result = ""
+        iterators = [
+            zip(*[iter(tcl_list.words)] * len(names)) for names, tcl_list in self.variables_names_and_values_lists
+        ]
+        try:
+            for value_groups in zip(*iterators):
+                namespace.update(
+                    {
+                        name: value
+                        for (names, _), values in zip(self.variables_names_and_values_lists, value_groups)
+                        for name, value in zip(names, values)
+                    }
+                )
+                try:
+                    result = self.body.substitute(namespace)
+                except TCLContinueSignal:
+                    pass
+        except TCLBreakSignal:
+            pass
+        return result
+
     @classmethod
-    def interpertize(cls, arguments: list[TCLCommandArguments], namespace: dict[str, Any]) -> Self:
+    def build(cls, arguments: Sequence[TCLCommandArguments], namespace: dict[str, Any]) -> Self:
         args_iterator = iter(arguments)
 
         variables_names_and_lists = []
@@ -47,20 +60,12 @@ class TCLCommandForEach(TCLCommandBase):
             values_list = next(args_iterator, None)
 
             if values_list is None:
-                if not isinstance(argument, TCLBracesWord):
-                    raise ValueError()
-                body = TCLScript.read(argument.substitute_iterator(namespace))
+                body = TCLScript.read(iter(argument.substitute(namespace)))
                 break
 
-            names_list: tuple[str, ...]
-            if isinstance(argument, TCLWord):
-                names_list = (argument.substitute(namespace),)
-            elif isinstance(argument, TCLBracesWord):
-                names_list = tuple(TCLList.interpertize(argument, namespace).words)
-            else:
-                raise ValueError()
+            names_list = tuple(TCLList.build(argument, namespace).words)
 
-            variables_names_and_lists.append((names_list, TCLList.interpertize(values_list, namespace)))
+            variables_names_and_lists.append((names_list, TCLList.build(values_list, namespace)))
 
         if not variables_names_and_lists or not body:
             raise ValueError()
@@ -69,24 +74,35 @@ class TCLCommandForEach(TCLCommandBase):
 
 
 @dataclass
-class TCLCommandIf(TCLCommandBase):
+class TCLCommandIf:
     if_part: tuple[TCLExpression, TCLScript]
     elseif_parts: list[tuple[TCLExpression, TCLScript]]
     else_part: TCLScript | None
+
+    def substitute(self, namespace: dict[str, Any]) -> str:
+        condition, body = self.if_part
+        if condition.substitute(namespace) != "0":
+            return body.substitute(namespace)
+        for condition, body in self.elseif_parts:
+            if condition.substitute(namespace) != "0":
+                return body.substitute(namespace)
+        if self.else_part is not None:
+            return self.else_part.substitute(namespace)
+        return ""
 
     @classmethod
     def _read_if(
         cls, args_iterator: Iterator[TCLCommandArguments], namespace: dict[str, Any]
     ) -> tuple[TCLExpression, TCLScript]:
         expression_word = next(args_iterator)
-        expression = TCLExpression.interpertize([expression_word], namespace)
+        expression = TCLExpression.build([expression_word], namespace)
         body = next(args_iterator)
         if body.substitute(namespace) == "then":
             body = next(args_iterator)
         return expression, TCLScript.read(body.substitute_iterator(namespace))
 
     @classmethod
-    def interpertize(cls, arguments: list[TCLCommandArguments], namespace: dict[str, Any]) -> Self:
+    def build(cls, arguments: Sequence[TCLCommandArguments], namespace: dict[str, Any]) -> Self:
         args_iterator: Iterator[TCLCommandArguments] = chain([TCLWord("if")], arguments)
 
         if_part: tuple[TCLExpression, TCLScript] | None = None
@@ -110,210 +126,10 @@ class TCLCommandIf(TCLCommandBase):
         return cls(if_part, elseif_parts, else_part)
 
 
-@dataclass
-class TCLStringIs(TCLCommandBase):
-    CLASSES: ClassVar[dict[str, TCLCommandBase]] = {}
-
-    class_: str
-    string: str
-    strict: bool = False
-    fail_index: str = ""
-
-    def execute(self, namespace: dict[str, Any]) -> str:
-        match self.class_:
-            case "true":
-                return "1" if self.string.lower() in ["yes", "true", "1", "on"] else "0"
-            case "false":
-                return "1" if self.string.lower() in ["no", "false", "0", "off"] else "0"
-            case "boolean":
-                return "1" if self.string.lower() in ["yes", "true", "1", "on", "no", "false", "0", "off"] else "0"
-            case _:
-                raise TCLInterpretationError()
-
-    @classmethod
-    def interpertize(cls, arguments: list[TCLCommandArguments], namespace: dict[str, Any]) -> Self:
-        class_ = arguments[0].substitute(namespace)
-
-        if class_ not in cls.CLASSES:
-            raise TCLInterpretationError()
-
-        string = arguments[-1].substitute(namespace)
-
-        strict = False
-        fail_index = ""
-        arguments_iterator: Iterator[TCLCommandArguments] = iter(arguments[1:-1])
-        while argument := next(arguments_iterator, None):
-            match argument.substitute(namespace):
-                case "-strict":
-                    strict = True
-                case "-failindex":
-                    fail_index = next(arguments_iterator).substitute(namespace)
-                case _:
-                    raise TCLInterpretationError()
-
-        return cls(class_, string, strict, fail_index)
-
-
 TCLMathOperandType = str | TCLCommandArguments
 
 
-@functools.total_ordering
-class TCLMathOperator(TCLCommandBase):
-    PRECEDENCE: ClassVar[int]
-    NUMBER_OF_OPERANDS: ClassVar[int | None] = None
-    ASSOCIATIVITY: ClassVar[Literal["L", "R"]] = "L"
-
-    def __init__(self, *args: TCLMathOperandType | Sequence[TCLMathOperandType]) -> None: ...
-
-    @classmethod
-    def from_args(cls, *args: TCLMathOperandType) -> Self:
-        raise NotImplementedError()
-
-    def __lt__(self, other: object) -> bool:
-        if not isinstance(other, TCLMathOperator):
-            raise ValueError()
-        return self.PRECEDENCE < other.PRECEDENCE
-
-    @classmethod
-    def _parse_operand(cls, operand: TCLMathOperandType, namespace: dict[str, Any]) -> int | float | str:
-        if isinstance(operand, TCLMathOperator):
-            operand = operand.execute(namespace)
-        if isinstance(operand, TCLCommandArguments):
-            operand = operand.substitute(namespace)
-        try:
-            return int(operand)
-        except ValueError:
-            try:
-                return float(operand)
-            except ValueError:
-                return operand
-
-    @classmethod
-    def _operator_execute(cls, operator: Callable[..., int | float], *operands: str, namespace: dict[str, Any]) -> str:
-        result = reduce(operator, map(lambda x: cls._parse_operand(x, namespace), operands))
-        if isinstance(result, bool):
-            return "1" if result else "0"
-        return str(result)
-
-
-T = TypeVar("T", bound=TCLMathOperator)
-
-
-def tcl_math_operator(
-    operator: str, precedence: int, number_of_operands: int | None = None, associativity: Literal["L", "R"] = "L"
-) -> Callable[[type[T]], type[T]]:
-    @dataclass_transform()
-    def wrapper(cls: type[T]) -> type[T]:
-        assert issubclass(cls, TCLMathOperator)
-
-        cls.PRECEDENCE = precedence
-        cls.NUMBER_OF_OPERANDS = number_of_operands
-        cls.ASSOCIATIVITY = associativity
-
-        if number_of_operands is None:
-
-            def from_args(a_cls: type[T], *args: TCLMathOperandType) -> T:
-                return a_cls(args)
-        else:
-
-            def from_args(a_cls: type[T], *args: TCLMathOperandType) -> T:
-                return a_cls(*args)
-
-        setattr(cls, "from_args", classmethod(from_args))
-
-        operator_class = dataclass(cls)
-
-        return operator_class
-
-    return wrapper
-
-
-class TCLMathOperatorBooleanNegation(TCLMathOperator):
-    operand: str
-
-    def execute(self, namespace: dict[str, Any]) -> str:
-        return "1" if TCLStringIs("false", self.operand).execute(namespace) == "0" else "0"
-
-
-class TCLMathOperatorBitWiseNegation(TCLMathOperator):
-    operand: str
-
-    def execute(self, namespace: dict[str, Any]) -> str:
-        return str(~int(self.operand))
-
-
-class TCLMathOperatorSubtraction(TCLMathOperator):
-    operands: list[str]
-
-
-class TCLMathOperatorSummation(TCLMathOperator):
-    operands: list[str]
-
-
-class TCLMathOperatorPower(TCLMathOperator):
-    operands: list[str]
-
-
-class TCLMathOperatorShiftLeft(TCLMathOperator):
-    left_operand: str
-    right_operand: str
-
-
-class TCLMathOperatorShiftRight(TCLMathOperator):
-    left_operand: str
-    right_operand: str
-
-
-class TCLMathOperatorBitWiseOr(TCLMathOperator):
-    operands: list[str]
-
-
-class TCLMathOperatorBitWiseAnd(TCLMathOperator):
-    operands: list[str]
-
-
-class TCLMathOperatorBitWiseXor(TCLMathOperator):
-    operands: list[str]
-
-
-class TCLMathOperatorEqual(TCLMathOperator):
-    operands: list[str]
-
-
-class TCLMathOperatorNotEqual(TCLMathOperator):
-    operands: list[str]
-
-
-class TCLMathOperatorLess(TCLMathOperator):
-    operands: list[str]
-
-
-class TCLMathOperatorGreater(TCLMathOperator):
-    operands: list[str]
-
-
-class TCLMathOperatorLessOrEqual(TCLMathOperator):
-    operands: list[str]
-
-
-class TCLMathOperatorGreaterOrEqual(TCLMathOperator):
-    operands: list[str]
-
-
-class TCLMathOperatorMultiply(TCLMathOperator):
-    operands: list[str]
-
-
-class TCLMathOperatorDivision(TCLMathOperator):
-    operands: list[str]
-
-
-class TCLMathOperatorModule(TCLMathOperator):
-    operands: list[str]
-
-
 @dataclass
-@functools.total_ordering
 class ExpressionOperator:
     operator_func: Callable[..., int | float | bool | tuple]
     representation: str
@@ -376,11 +192,11 @@ EXPRESSION_OPERATOR = {
 
 
 @dataclass
-class TCLExpression(TCLCommandBase):
+class TCLExpression:
     postfix: list[str | TCLCommandArguments]
 
     @classmethod
-    def _iterate_expression(cls, arguments: list[TCLCommandArguments], namespace: dict[str, Any]) -> Iterator[str]:
+    def _iterate_expression(cls, arguments: Sequence[TCLCommandArguments], namespace: dict[str, Any]) -> Iterator[str]:
         for argument in arguments[:-1]:
             yield from argument.substitute_iterator(namespace)
             yield from " "
@@ -394,6 +210,7 @@ class TCLExpression(TCLCommandBase):
         while char := next(chars, None):
             if value + char not in EXPRESSION_OPERATOR:
                 chars.push_back()
+                chars.drop_last()
                 break
             value += char
 
@@ -408,9 +225,11 @@ class TCLExpression(TCLCommandBase):
         while char := next(chars, None):
             match char:
                 case " " | "\t" | "\n":
+                    chars.drop_last()
                     break
                 case "*" | "<":
                     chars.push_back()
+                    chars.drop_last()
                     break
                 case _:
                     value += char
@@ -433,15 +252,17 @@ class TCLExpression(TCLCommandBase):
                     yield TCLVariableSubstitutionWord.read(iterator)
                 case "{":
                     yield TCLBracesWord.read(iterator)
+                case "[":
+                    yield TCLBracketWord.read(iterator)
                 case "*" | "<":
-                    iterator.push_back()
+                    iterator.unget(char)
                     yield cls._read_operator(iterator)
                 case _:
-                    iterator.push_back()
+                    iterator.unget(char)
                     yield cls._read_value(iterator)
 
     @classmethod
-    def interpertize(cls, arguments: list[TCLCommandArguments], namespace: dict[str, Any]) -> Self:
+    def build(cls, arguments: Sequence[TCLCommandArguments], namespace: dict[str, Any]) -> Self:
         expression_iterator = cls._iterate_expression(arguments, namespace)
         tokens_iterator = cls._iterate_tokens(expression_iterator)
 
@@ -480,7 +301,7 @@ class TCLExpression(TCLCommandBase):
 
         return cls(postfix)
 
-    def execute(self, namespace: dict[str, Any]) -> str:
+    def substitute(self, namespace: dict[str, Any]) -> str:
         postfix = list(self.postfix)
         commands_stack: list[TCLMathOperandType] = []
         while postfix:

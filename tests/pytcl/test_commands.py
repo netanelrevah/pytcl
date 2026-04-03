@@ -21,8 +21,8 @@ def test_tcl_expression__substitute(word, expected_interpretation, should_raise)
 
     if should_raise:
         with pytest.raises(TCLSubstituteError, match=expected_interpretation):
-            TCLExpression.interpertize(word, namespace=namespace)
+            TCLExpression.build(word, namespace=namespace)
     else:
-        instance = TCLExpression.interpertize(word, namespace=namespace)
+        instance = TCLExpression.build(word, namespace=namespace)
 
-        assert instance.execute(namespace) == expected_interpretation
+        assert instance.substitute(namespace) == expected_interpretation

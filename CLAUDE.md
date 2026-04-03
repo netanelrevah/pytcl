@@ -68,3 +68,8 @@ Tests use `pytest-parametrization` (`@Parametrization.case`). The namespace `{"a
 ## Workflow
 
 When the user corrects a workflow mistake (e.g., wrong command, missing `.gitignore` entries), save the correction here — CLAUDE.md is loaded every session and is the authoritative source for project rules.
+
+## Unordered Notes
+- when you want to run code to check if things work, don't do this, create a test cases instead and run pytest. This way you have a permanent record of the behavior and can easily rerun it in the future.
+- when running command from root directory, NEVER run "cd && <command>" to change dir, just run the command.  
+- when running command that need to change dir, first try to use command flags to specify the path.
