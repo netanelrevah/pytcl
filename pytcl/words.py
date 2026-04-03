@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import string
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, TextIO, TypeVar, dataclass_transform, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, TextIO, TypeVar, dataclass_transform
 
 from pytcl.errors import TCLSubstituteError
 from pytcl.iterators import CharsIterator, read_text_io_by_characters
@@ -41,30 +41,12 @@ class TCLWordBase:
 T = TypeVar("T", bound=TCLWordBase)
 
 
-@dataclass_transform()
-def tcl_word_wrapper(cls: type[T]) -> type[T]:
+@dataclass_transform(field_specifiers=(field,))
+def tcl_word(cls: type[T]) -> type[T]:
     assert issubclass(cls, TCLWordBase)
-
     cls.__annotations__["origin"] = str
-    setattr(cls, "origin", field(default="", init=False))
-
+    setattr(cls, "origin", field(default="", compare=False))
     return dataclass(cls)
-
-
-@overload
-@dataclass_transform()
-def tcl_word(command_cls: type[T], /) -> type[T]: ...
-
-
-@overload
-@dataclass_transform()
-def tcl_word(*args: type[T]) -> type[T]: ...
-
-
-def tcl_word(*args: Any) -> Any:
-    if len(args) == 0:
-        return tcl_word_wrapper
-    return tcl_word_wrapper(args[0])
 
 
 @tcl_word
@@ -83,7 +65,6 @@ class TCLVariableSubstitutionWord(TCLWordBase):
             match char:
                 case non_name_char if non_name_char not in string.digits + string.ascii_letters + ":":
                     chars.push_back()
-                    chars.drop_last()
                     break
                 case _:
                     variable_name += char
@@ -104,7 +85,6 @@ class TCLWord(TCLWordBase):
             match char:
                 case " " | "\t" | "\n" | ";":
                     chars.push_back()
-                    chars.drop_last()
                     break
                 case _:
                     name += char

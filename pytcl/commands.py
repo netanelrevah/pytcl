@@ -210,7 +210,6 @@ class TCLExpression:
         while char := next(chars, None):
             if value + char not in EXPRESSION_OPERATOR:
                 chars.push_back()
-                chars.drop_last()
                 break
             value += char
 
@@ -229,7 +228,6 @@ class TCLExpression:
                     break
                 case "*" | "<":
                     chars.push_back()
-                    chars.drop_last()
                     break
                 case _:
                     value += char

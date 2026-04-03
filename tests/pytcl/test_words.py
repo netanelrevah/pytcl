@@ -2,7 +2,7 @@ import pytest
 from parametrization import Parametrization
 
 from pytcl.errors import TCLSubstituteError
-from pytcl.words import TCLDoubleQuotedWord, TCLVariableSubstitutionWord
+from pytcl.words import TCLBracesWord, TCLCommandWord, TCLDoubleQuotedWord, TCLScript, TCLVariableSubstitutionWord
 
 
 def test_variable_substitution_word__get_empty__fail():
@@ -38,3 +38,48 @@ def test_double_quoted_word__substitute(chars, expected_value, expected_substitu
             instance.substitute(namespace={})
     else:
         assert instance.substitute(namespace={"abc": 22}) == expected_substitute
+
+
+@Parametrization.parameters("cls", "code", "expected")
+@Parametrization.case(
+    "brace word with nested braces",
+    TCLBracesWord,
+    "tags {}",
+    TCLBracesWord("tags {}"),
+)
+@Parametrization.case(
+    "multiline brace word",
+    TCLBracesWord,
+    "proc helper {} {\nr flushall\n}\n",
+    TCLBracesWord("proc helper {} {\nr flushall\n}\n"),
+)
+@Parametrization.case(
+    "command with nested brace arg",
+    TCLCommandWord,
+    "start_server {tags {}}",
+    TCLCommandWord("start_server", [TCLBracesWord("tags {}")]),
+)
+@Parametrization.case(
+    "command with two brace args",
+    TCLCommandWord,
+    "start_server {tags {}} {\nproc helper {} {\nr flushall\n}\n}",
+    TCLCommandWord("start_server", [TCLBracesWord("tags {}"), TCLBracesWord("proc helper {} {\nr flushall\n}\n")]),
+)
+@Parametrization.case(
+    "script with command",
+    TCLScript,
+    "start_server {tags {}} {\nproc helper {} {\nr flushall\n}\n}",
+    TCLScript(
+        [TCLCommandWord("start_server", [TCLBracesWord("tags {}"), TCLBracesWord("proc helper {} {\nr flushall\n}\n")])]
+    ),
+)
+@Parametrization.case(
+    "brace arg",
+    TCLScript,
+    "tags {1 2 3}",
+    TCLScript([TCLCommandWord("tags", [TCLBracesWord("1 2 3")])]),
+)
+def test_read(cls, code, expected):
+    instance = cls.read(code)
+    assert instance == expected
+    assert instance.origin == code

@@ -1,6 +1,6 @@
 [project]
 name = "pytclsh"
-version = "0.0.1"
+version = "0.0.2"
 description = "pytclsh: Pure Python TCL interpreter"
 readme = "README.md"
 authors = [

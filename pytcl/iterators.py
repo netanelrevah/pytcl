@@ -22,16 +22,21 @@ class CharsIterator:
 
     def __next__(self) -> str:
         if self._leftovers:
-            return self._leftovers.pop(0)
-        char = next(self._iterator)
-        self._accumulator_stack[-1].append(char)
+            char = self._leftovers.pop(0)
+        else:
+            char = next(self._iterator)
+        for level in self._accumulator_stack:
+            level.append(char)
         return char
 
     def __iter__(self) -> Self:
         return self
 
     def push_back(self) -> None:
-        self._leftovers.append(self._accumulator_stack[-1][-1])
+        char = self._accumulator_stack[-1][-1]
+        for level in self._accumulator_stack:
+            level.pop()
+        self._leftovers.insert(0, char)
 
     def unget(self, char: str) -> None:
         self._leftovers.insert(0, char)
