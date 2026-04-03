@@ -1,6 +1,6 @@
 [project]
 name = "nrevah-pytcl"
-version = "0.0.2"
+version = "0.0.3"
 description = "nrevah-pytcl: Pure Python TCL interpreter"
 readme = "README.md"
 authors = [
