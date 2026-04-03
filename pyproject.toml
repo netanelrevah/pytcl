@@ -1,7 +1,7 @@
 [project]
-name = "pytclsh"
+name = "nrevah-pytcl"
 version = "0.0.2"
-description = "pytclsh: Pure Python TCL interpreter"
+description = "nrevah-pytcl: Pure Python TCL interpreter"
 readme = "README.md"
 authors = [
     { name = "Netanel Revah", email = "netanelrevah@outlook.com" },
