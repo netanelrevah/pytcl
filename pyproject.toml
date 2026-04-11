@@ -1,0 +1,70 @@
+[project]
+name = "nrevah-pytcl"
+version = "0.0.4"
+description = "nrevah-pytcl: Pure Python TCL interpreter"
+readme = "README.md"
+authors = [
+    { name = "Netanel Revah" },
+]
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.uv.build-backend]
+module-name = "pytcl"
+module-root = ""
+
+[build-system]
+requires = ["uv_build>=0.8.5,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "docker>=7.0.0",
+    "mypy>=1.15.0",
+    "pip-audit>=2.0.0",
+    "pre-commit>=4.0.0",
+    "pytest>=8.3.4",
+    "pytest-parametrization>=2022.2.1",
+    "ruff>=0.9.6",
+    "ty>=0.0.1a7",
+]
+
+[tool.pytest.ini_options]
+addopts = [
+    "--import-mode=importlib",
+]
+
+testpaths = "tests"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+lint.select = [
+    "ANN",
+    "E",
+    "F",
+    "FA",
+    "FURB",
+    "I",
+    "N",
+    "PGH",
+    "PERF",
+    "PL",
+    "RUF",
+    "UP",
+    "YTT",
+    "TC",
+]
+lint.ignore = [
+    "E731",
+    "RUF009",
+    "PLR0911",
+    "PLR0912",
+    "PLR0913",
+    "PLR0915",
+    "PLW2901",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"**/{tests,integrations}/*" = ["ANN", "PLR2004", "PLR0913", "E501"]

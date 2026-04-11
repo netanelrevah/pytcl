@@ -1,0 +1,402 @@
+from __future__ import annotations
+
+import string
+import textwrap
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, TextIO, TypeVar, dataclass_transform
+
+from pytcl.errors import TCLSubstituteError
+from pytcl.iterators import CharsIterator, read_text_io_by_characters
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+
+class TCLWordBase:
+    origin: str
+
+    def formatted(self) -> str:
+        return str(self)
+
+    def substitute(self, namespace: dict[str, Any]) -> str:
+        return "".join(self.substitute_iterator(namespace))
+
+    def substitute_iterator(self, namespace: dict[str, Any]) -> Iterator[str]:
+        raise NotImplementedError()
+
+    @classmethod
+    def read(cls, chars: Iterator[str] | str) -> Self:
+        iterator = chars
+        if not isinstance(iterator, CharsIterator):
+            iterator = CharsIterator.of(chars)
+        iterator.push()
+        tcl_word_base = cls._read(iterator)
+        tcl_word_base.origin = iterator.pop()
+        return tcl_word_base
+
+    @classmethod
+    def _read(cls, chars: CharsIterator) -> Self:
+        raise NotImplementedError()
+
+    def __str__(self) -> str:
+        return self.origin
+
+
+T = TypeVar("T", bound=TCLWordBase)
+
+
+@dataclass_transform(field_specifiers=(field,))
+def tcl_word(cls: type[T]) -> type[T]:
+    assert issubclass(cls, TCLWordBase)
+    cls.__annotations__["origin"] = str
+    setattr(cls, "origin", field(default="", compare=False))
+    return dataclass(cls)
+
+
+@tcl_word
+class TCLVariableSubstitutionWord(TCLWordBase):
+    variable_name: str
+
+    def substitute_iterator(self, namespace: dict[str, Any]) -> Iterator[str]:
+        if self.variable_name not in namespace:
+            raise TCLSubstituteError(f'can\'t read "{self.variable_name}": no such variable')
+        return iter(str(namespace[self.variable_name]))
+
+    @classmethod
+    def _read(cls, chars: CharsIterator) -> Self:
+        variable_name = ""
+        while char := next(chars, None):
+            match char:
+                case non_name_char if non_name_char not in string.digits + string.ascii_letters + ":_":
+                    chars.push_back()
+                    break
+                case _:
+                    variable_name += char
+        return cls(variable_name)
+
+
+@tcl_word
+class TCLWord(TCLWordBase):
+    value: str
+
+    def substitute_iterator(self, namespace: dict[str, Any]) -> Iterator[str]:
+        return iter(self.value)
+
+    @classmethod
+    def _read(cls, chars: CharsIterator) -> Self:
+        name = ""
+        while char := next(chars, None):
+            match char:
+                case " " | "\t" | "\n" | ";":
+                    chars.push_back()
+                    break
+                case "\\":
+                    next_char = next(chars, None)
+                    if next_char == "\n":
+                        chars.push_back()  # push \n back so command reader sees end-of-word
+                        break
+                    if next_char is not None:
+                        chars.push_back()
+                    name += char
+                case _:
+                    name += char
+        return cls(name)
+
+
+@tcl_word
+class TCLBracketWord(TCLWordBase):
+    script: TCLScript
+
+    def substitute_iterator(self, namespace: dict[str, Any]) -> Iterator[str]:
+        return self.script.substitute_iterator(namespace)
+
+    @classmethod
+    def _iterate_in_bracket(cls, chars: CharsIterator) -> Iterator[str]:
+        chars_collected = False
+        depth = 0
+        while char := next(chars, None):
+            match char:
+                case "\\":
+                    next_char = next(chars, None)
+                    if next_char is not None:
+                        yield char
+                        yield next_char
+                        chars_collected = True
+                case "[":
+                    depth += 1
+                    chars_collected = True
+                    yield char
+                case "]":
+                    if depth == 0:
+                        chars.drop_last()
+                        break
+                    depth -= 1
+                    chars_collected = True
+                    yield char
+                case "\n":
+                    if chars_collected:
+                        yield char
+                case _:
+                    yield char
+
+    @classmethod
+    def _read(cls, chars: CharsIterator) -> Self:
+        return cls(TCLScript.read(cls._iterate_in_bracket(chars)))
+
+
+@tcl_word
+class TCLDoubleQuotedWord(TCLWordBase):
+    value: str
+
+    ESCAPING_CHARS: ClassVar[dict] = {"a": "\a", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v"}
+    HEX_DIGITS: ClassVar[str] = "0123456789abcdef"
+    MAX_NUM_OF_DIGITS_BY_ESCAPE_CHAR: ClassVar[dict] = {"x": 2, "u": 4, "U": 8}
+
+    @classmethod
+    def _read_unicode_value(
+        cls, first_digit: str, chars: CharsIterator, max_num_of_digits: int, base: Literal[8, 16]
+    ) -> str:
+        number_of_chars = 1
+        digits = first_digit
+        while number_of_chars < max_num_of_digits:
+            char = next(chars, None)
+            if char is None:
+                break
+            if char.lower() not in cls.HEX_DIGITS[:base]:
+                chars.push_back()
+                break
+            digits += char
+
+        return chr(int(digits, base))
+
+    @classmethod
+    def _substitute_backslash(cls, chars: CharsIterator) -> str:
+        while char := next(chars, None):
+            if char in "abfnrtv":
+                return cls.ESCAPING_CHARS[char]
+            if char.isdigit():
+                return cls._read_unicode_value(char, chars, 3, 8)
+            if char in "xuU":
+                first_digit = next(chars, None)
+                if first_digit is None:
+                    return char
+                if first_digit.lower() not in cls.HEX_DIGITS:
+                    chars.push_back()
+                    return char
+                return cls._read_unicode_value(first_digit, chars, cls.MAX_NUM_OF_DIGITS_BY_ESCAPE_CHAR[char], 16)
+            return char
+        raise TCLSubstituteError()
+
+    def substitute_iterator(self, namespace: dict[str, Any]) -> Iterator[str]:
+        chars = CharsIterator.of(self.value)
+        chars.push()
+        while char := next(chars, None):
+            match char:
+                case "\\":
+                    yield from self._substitute_backslash(chars)
+                case "$":
+                    next_char = next(chars, None)
+                    if not next_char:
+                        yield "$"
+                        break
+                    if next_char in [" ", "\n", "$"]:
+                        yield from ["$", next_char]
+                        continue
+                    chars.push_back()
+                    yield from TCLVariableSubstitutionWord.read(chars).substitute_iterator(namespace)
+                case _:
+                    yield char
+
+        # parts = self.value.split(" ")
+        # for part in parts[:-1]:
+        #     yield from self._substitute_sub_word(part, namespace)
+        #     yield from " "
+        # yield from self._substitute_sub_word(parts[-1], namespace)
+
+    @classmethod
+    def read_backslash(cls, chars: Iterator[str]) -> str:
+        char = next(chars, None)
+        match char:
+            case None:
+                raise StopIteration()
+            case "\n":
+                return " "
+            case _:
+                return "\\" + char
+
+    @classmethod
+    def _read(cls, chars: CharsIterator) -> Self:
+        value: list[str] = []
+        while char := next(chars, None):
+            match char:
+                case "\\":
+                    value.append(cls.read_backslash(chars))
+                case '"':
+                    chars.drop_last()
+                    break
+                case _:
+                    value.append(char)
+
+        return cls("".join(value))
+
+
+@tcl_word
+class TCLBracesWord(TCLWordBase):
+    value: str
+
+    def formatted(self) -> str:
+        if "\n" not in self.value:
+            return str(self)
+        body = textwrap.indent(textwrap.dedent(self.value).strip(), "    ")
+        return "{\n" + body + "\n}"
+
+    def substitute_iterator(self, namespace: dict[str, Any]) -> Iterator[str]:
+        yield from self.value
+
+    @classmethod
+    def _read(cls, chars: CharsIterator) -> Self:
+        collected_chars: list[str] = []
+
+        depth = 0
+        while char := next(chars, None):
+            match char:
+                case "{":
+                    depth += 1
+                    collected_chars.append(char)
+                case "}":
+                    if depth == 0:
+                        chars.drop_last()
+                        break
+                    depth -= 1
+                    collected_chars.append(char)
+                case "\n":
+                    if collected_chars:
+                        collected_chars.append(char)
+                case _:
+                    collected_chars.append(char)
+
+        return cls("".join(collected_chars))
+
+
+TCLCommandArguments = TCLBracesWord | TCLDoubleQuotedWord | TCLBracketWord | TCLVariableSubstitutionWord | TCLWord
+
+
+@tcl_word
+class TCLCommandWord(TCLWordBase):
+    name: str
+    args: list[TCLCommandArguments]
+
+    def formatted(self) -> str:
+        parts = [self.name, *(arg.formatted() for arg in self.args)]
+        return " ".join(parts)
+
+    def substitute_iterator(self, namespace: dict[str, Any]) -> Iterator[str]:
+        cmd = namespace.get(self.name)
+        if cmd is None:
+            raise TCLSubstituteError(f'invalid command name "{self.name}"')
+        substituted = [arg.substitute(namespace) for arg in self.args]
+        yield from cmd(substituted, namespace)
+
+    @classmethod
+    def read_name(cls, chars: CharsIterator) -> str:
+        name = ""
+        while char := next(chars, None):
+            match char:
+                case " " | "\t":
+                    if name == "":
+                        continue
+                    break
+                case ";":
+                    if name:
+                        chars.push_back()
+                        break
+                case "\n":
+                    if name:
+                        chars.push_back()
+                        break
+                    raise ValueError()
+                case _:
+                    name += char
+        return name
+
+    @classmethod
+    def _read(cls, chars: CharsIterator) -> Self:
+        name = cls.read_name(chars)
+
+        arguments: list[TCLCommandArguments] = []
+        while char := next(chars, None):
+            match char:
+                case "\n" | ";":
+                    chars.drop_last()
+                    break
+                case '"':
+                    arg = TCLDoubleQuotedWord.read(chars)
+                    arg.origin = '"' + arg.origin + '"'
+                    arguments.append(arg)
+                case "{":
+                    arg = TCLBracesWord.read(chars)
+                    arg.origin = "{" + arg.origin + "}"
+                    arguments.append(arg)
+                case "[":
+                    arguments.append(TCLBracketWord.read(chars))
+                case "}" | "]":
+                    raise ValueError()
+                case "$":
+                    arguments.append(TCLVariableSubstitutionWord.read(chars))
+                case " " | "\t":
+                    continue
+                case "\\":
+                    next_char = next(chars, None)
+                    if next_char == "\n":
+                        continue  # line continuation: skip \ + newline
+                    if next_char is not None:
+                        chars.push_back()
+                    chars.push_back()
+                    arguments.append(TCLWord.read(chars))
+                case _:
+                    chars.push_back()
+                    arguments.append(TCLWord.read(chars))
+        return cls(name, arguments)
+
+
+EMPTY_COMMAND = TCLCommandWord(name="", args=[])
+
+
+@dataclass
+class TCLScript(TCLWordBase):
+    commands: list[TCLCommandWord]
+
+    def substitute_iterator(self, namespace: dict[str, Any]) -> Iterator[str]:
+        result = ""
+        for command in self.commands:
+            if command.name:
+                result = command.substitute(namespace)
+        yield from result
+
+    @classmethod
+    def handle_comment(cls, chars: Iterator[str]) -> None:
+        while char := next(chars, None):
+            if char == "\n":
+                break
+
+    @classmethod
+    def _read(cls, chars: CharsIterator, in_bracket: bool = False) -> Self:
+        commands: list[TCLCommandWord] = []
+        while char := next(chars, None):
+            match char:
+                case "\n" | ";" | " " | "\t":
+                    continue
+                case "#":
+                    cls.handle_comment(chars)
+                case _:
+                    chars.push_back()
+                    commands.append(TCLCommandWord.read(chars))
+
+        return cls(commands)
+
+    @classmethod
+    def read_text_io(cls, text_io: TextIO) -> Self:
+        return cls.read(read_text_io_by_characters(text_io))
+
+
+EMTPY_SCRIPT = TCLScript([EMPTY_COMMAND])
